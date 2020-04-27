@@ -4,6 +4,26 @@ from scipy.signal import butter, filtfilt, welch, firwin
 from sklearn.preprocessing import normalize
 from sklearn.preprocessing import StandardScaler
 from matplotlib import pyplot as plt
+import scipy
+
+
+def zero_crossings(data: np.array) -> int:
+    """ The rate of sign-changes in the processed signal
+
+    Parameters
+    ----------
+    data : np.array
+        Your array of signal data
+
+    Returns
+    -------
+    int
+        The number of times the signal crossed the line y = 0.
+
+    Implementation: https://stackoverflow.com/questions/30272538/python-code-for-counting-number-of-zero-crossings-in-an-array#30281079
+    """
+
+    return ((data[:-1] * data[1:]) < 0).sum()
 
 
 def power_analysis(df: pd.DataFrame, field_prefix='mean_', show=False):
