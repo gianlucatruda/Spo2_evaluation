@@ -1,7 +1,8 @@
-from data_loader import DataLoader, Spo2Dataset
+from preprocessing.data_loader import DataLoader, Spo2Dataset
 import pandas as pd
 from pathlib import Path
 import json
+import numpy as np
 
 
 def dataset_to_dataframe(dataset: Spo2Dataset):
@@ -72,13 +73,17 @@ def ground_truth_dataframe(data_path="sample_data/"):
     """
 
     path = Path(data_path)
-    gt_dict = {"path": [], "HR": [], "SpO2": []}
-    for file in path.glob("**/gt.json"):
+    gt_dict = {"path": [], "hr": [], "spo2": []}
+    for file in path.glob("**/data.json"):
         with open(file, "r") as json_file:
             json_vals = json.load(json_file)
             gt_dict["path"].append(str(file.parent))
-            for key in ["HR", "SpO2"]:
-                gt_dict[key].append(json_vals[key])
+            for key in ["hr", "spo2"]:
+                try:
+                    gt_dict[key].append(json_vals['survey'][key])
+                except Exception as e:
+                    print('Error:', e)
+                    gt_dict[key].append(np.NaN)
 
     df = pd.DataFrame.from_dict(gt_dict)
 
