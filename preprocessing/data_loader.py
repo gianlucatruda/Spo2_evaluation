@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import torchvision
 import os
+import sys
 import json
 import torch
 from threading import Thread
@@ -63,20 +64,21 @@ class Spo2Dataset(Dataset):
 
                     (grabbed, frame) = vidcap.read()
 
-                with open(video.parent / "gt.json", "r") as f:
+                with open(video.parent / "data.json", "r") as f:
                     ground_truth = json.load(f)
-                    if ground_truth["SpO2"] == "Unkown":
-                        ground_truth["SpO2"] = -1
+                    if ground_truth["spo2"] == "Unkown":
+                        ground_truth["spo2"] = -1
                         continue
 
                 labels = torch.Tensor(
-                    [int(ground_truth["SpO2"]), int(ground_truth["HR"])]
+                    [int(ground_truth["spo2"]), int(ground_truth["hr"])]
                 )
                 self.videos_ppg.append(torch.Tensor(np.array(ppg)))
                 self.meta_list.append(meta)
                 self.labels_list.append(labels)
             except Exception as e:
-                print(video, e)
+                print('Error:', video, e)
+                # raise e
 
     # @timing
     def reshape(self, frame):
@@ -184,14 +186,18 @@ def spo2_collate_fn(batch):
 
 
 if __name__ == "__main__":
-    DATADIR = Path("sample_data")
-    PERSIST = False
+    args = sys.argv
+    if len(args) != 2:
+        raise ValueError("Please provide a path to load data from")
 
-    dataset = Spo2Dataset(DATADIR)
+    datadir = Path(args[1])
+    PERSIST = True
+
+    dataset = Spo2Dataset(datadir)
 
     if PERSIST:
         # Persist Spo2Dataset object to a pickle for quick reload
-        persist_dir = DATADIR / "pickled"
+        persist_dir = datadir / "pickled"
         print(f"Persisting dataset to {persist_dir}")
         if not os.path.exists(persist_dir):
             os.makedirs(persist_dir)

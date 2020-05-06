@@ -2,9 +2,13 @@
 data/*
 Pipfile
 Pipfile.lock
+profiling/*
 
 # macOS dotfiles
 **/.DS_Store
+
+# VScode stuff
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
