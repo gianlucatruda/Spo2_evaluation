@@ -12,6 +12,45 @@ import pywt
 from ..lamonaca_and_nemcova.utils import spo2_estimation, get_peak_height_slope
 
 
+def _eval_feat_engineering(all_features):
+    # Little helper function I wrote for some analysis comparing HR and SpO2 as a target
+
+    # https://github.com/gianlucatruda/Spo2_evaluation/issues/4
+    from sklearn.metrics import mean_squared_error as mse
+    from sklearn.linear_model import LassoLars
+    from sklearn.neural_network import MLPRegressor
+    from xgboost import XGBRegressor
+    from tqdm import tqdm
+    from sklearn.model_selection import KFold
+    import json
+    from pandas.io.json import json_normalize
+
+    targets = ['spo2', 'hr']
+    models = [XGBRegressor, LassoLars, MLPRegressor]
+    model_names = ['xgboost', 'lasso', 'mlp']
+    K_vals = [6, 10, 15, 20, 30, 50, 80]
+
+    results = {'target': [], 'model': [], 'k': [], 'mse': []}
+
+    for target in targets:
+        print(f"Evaluating {target}...")
+        for K in tqdm(K_vals):
+            _X = all_features.drop(targets, axis=1).values
+            _y = all_features[target].values
+            kbest = SelectKBest(f_classif, k=K).fit(_X, _y)
+            _X = _X[:, kbest.get_support()]
+            kf = KFold(n_splits=5)
+            for train_index, test_index in kf.split(_X):
+                X_train, X_test = _X[train_index], _X[test_index]
+                y_train, y_test = _y[train_index], _y[test_index]
+                for model, mname in zip(models, model_names):
+                    mod = model().fit(X_train, y_train)
+                    score = mse(y_test, mod.predict(X_test))
+                    for key, value in {'target': target, 'model': mname, 'mse': score, 'k': K}.items():
+                        results[key].append(value)
+
+    return pd.DataFrame.from_dict(results)
+
 def calc_spo2(df: pd.DataFrame):
 
     """Not working"""
@@ -152,11 +191,12 @@ def _attach_sample_id_to_ground_truth(df: pd.DataFrame, labels: pd.DataFrame) ->
     pd.DataFrame
         [description]
     """
-    _df = df[['sample_id', 'sample_source']]
-    _labels = labels.copy()
 
-    _df = _create_path_field(_df)
-    _df = _df.drop_duplicates(subset=['sample_id', 'path'], keep='first')
+    _labels = labels.copy()
+    _df = df.drop_duplicates(subset=['sample_id'], keep='first')
+
+    if 'path' not in _df.columns:
+        _df = _create_path_field(_df)
 
     out = _df.merge(_labels, on='path', how='inner')
 
@@ -186,15 +226,17 @@ def engineer_features(df: pd.DataFrame, labels: pd.DataFrame, target='SpO2', sel
     _df = df.copy()
     _labels = labels.copy()
 
-    if 'sample_id' not in labels.columns:
-        _labels = _attach_sample_id_to_ground_truth(_df, _labels)
+    # if 'sample_id' not in _labels.columns:
+    #     _labels = _attach_sample_id_to_ground_truth(_df, _labels)
+    _df = _df.select_dtypes(np.number)
 
     ids = _df['sample_id'].unique()
 
     _labels = _labels[_labels['sample_id'].isin(ids)]
     y = _labels.set_index('sample_id')[target].astype(np.float)
 
-    _df.drop('sample_source', axis=1, inplace=True)
+    if 'sample_source' in _df.columns:
+        _df.drop('sample_source', axis=1, inplace=True)
 
     extracted_features = extract_features(
         _df,
@@ -204,6 +246,7 @@ def engineer_features(df: pd.DataFrame, labels: pd.DataFrame, target='SpO2', sel
 
     impute(extracted_features)
     features = extracted_features
+
     if select:
         features_filtered = select_features(
             extracted_features, y, ml_task='regression',)
@@ -216,7 +259,8 @@ def engineer_features(df: pd.DataFrame, labels: pd.DataFrame, target='SpO2', sel
 
 
 def select_best_features(df: pd.DataFrame, n_features=20, target='SpO2') -> pd.DataFrame:
-    """Perform feature selection using k-best strategy and return dataframe.
+    """Perform feature selection using k-best strategy and return dataframe
+    including the target.
 
     Parameters
     ----------
@@ -246,7 +290,7 @@ def select_best_features(df: pd.DataFrame, n_features=20, target='SpO2') -> pd.D
     return _df
 
 
-def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False) -> pd.DataFrame:
+def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False, numeric_sample_id=True) -> pd.DataFrame:
     """Simple data augmentation by chopping timeseries into blocks.
 
     This doesn't modify the data. It just overwrites the `sample_id`
@@ -269,7 +313,10 @@ def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False) -> pd.DataFra
     """
 
     def gen_sample_id(sid, frame):
-        return f"{sid}_{frame // n_frames}"
+        if numeric_sample_id:
+            return int(100*sid + (frame // n_frames))
+        else:
+            return f"{sid}_{frame // n_frames}"
 
     def gen_frame(frame):
         return frame % n_frames
