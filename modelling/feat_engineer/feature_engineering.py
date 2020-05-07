@@ -51,8 +51,8 @@ def _eval_feat_engineering(all_features):
 
     return pd.DataFrame.from_dict(results)
 
-def calc_spo2(df: pd.DataFrame):
 
+def calc_spo2(df: pd.DataFrame):
     """Not working"""
     raise NotImplementedError()
 
@@ -63,8 +63,10 @@ def calc_spo2(df: pd.DataFrame):
 
     timestamps = np.linspace(0, int(float(df.shape[0])/30.0), num=df.shape[0])
 
-    vp_940, m_940, hr_940 = get_peak_height_slope(df['tx_green'].values, timestamps, 30.0)
-    vp_600, m_600, hr_600 = get_peak_height_slope(df['tx_red'].values, timestamps, 30.0)
+    vp_940, m_940, hr_940 = get_peak_height_slope(
+        df['tx_green'].values, timestamps, 30.0)
+    vp_600, m_600, hr_600 = get_peak_height_slope(
+        df['tx_red'].values, timestamps, 30.0)
 
     ln_vp_600 = np.log(vp_600)
     ln_vp_940 = np.log(vp_940)
@@ -87,7 +89,13 @@ def _wavelet_filter_signal(s, wave='db4', *args, **kwargs):
     return s_mod
 
 
-def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193, 0.001), scale=False, block_id='sample_id') -> pd.DataFrame:
+def rgb_to_ppg(df: pd.DataFrame,
+               filter='band',
+               outlier_thresh=2.5,
+               scale=True,
+               smoothing_window=3,
+               block_id='sample_id',
+               ) -> pd.DataFrame:
     """Turn RGB means into PPG curves as per Lamonaca.
 
     Parameters
@@ -99,9 +107,14 @@ def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193
         `band` = bandpass Butterworth filter
         `low` = lowpass Butterworth filter
         `firwin` = lowpass Firwin filter
-    qe_constants : (float, float, float)
-        The Quantum Efficiency constants (Lamonaca et al.) to use for scaling the
-        means of the (red, green, blue) channels respectively.
+    outlier_thresh : float, optional
+        The number of standard deviations at which outliers will be
+        clipped, by default 2.5.
+    scale : bool, optional
+        Whether the signals should be scaled to the range 0-1 using MinMax.
+        Set to None to disable.
+    smoothing_window : int, optional
+        The window size to use for smoothing. Set to None to disable.
     block_id : str, optional
         The field to use for chunking the data before applying transforms,
         by default 'sample_id'.
@@ -119,8 +132,7 @@ def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193
     _df = df.copy()
 
     for i, colour in enumerate(['red', 'green', 'blue']):
-        qe_const = qe_constants[i]
-        _df[f'tx_{colour}'] = _df[f'mean_{colour}'] * qe_const
+        _df[f'tx_{colour}'] = _df[f'mean_{colour}'] * 1.0
 
     tx_fields = ['tx_red', 'tx_green', 'tx_blue']
 
@@ -142,16 +154,36 @@ def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193
                 b = firwin(order+1, cutoff, )
                 a = 1.0
 
-        # Apply the filter (and normalise)
-        for bid in _df[block_id].unique():
-            for field in tx_fields:
+    for bid in _df[block_id].unique():
+        for field in tx_fields:
+
+            # Apply the filter
+            if filter is not None:
                 _df.loc[_df[block_id] == bid, field] = filtfilt(
                     b, a, _df[_df[block_id] == bid][field])
 
-                # Scaling
-                if scale:
-                    _df.loc[_df[block_id] == bid, field] = MinMaxScaler(
-                    ).fit_transform(_df[_df[block_id] == bid][field].values.reshape(-1, 1))
+            # Clip outliers
+            if outlier_thresh is not None:
+                sig = _df[_df[block_id] == bid][field]
+                stdev = sig.values.std()
+                median = np.median(sig.values)
+                mean = sig.mean()
+                sig = np.where(sig < (outlier_thresh*stdev),
+                               sig, mean+outlier_thresh*stdev)
+                sig = np.where(sig < (-outlier_thresh*stdev),
+                               mean-outlier_thresh*stdev, sig)
+                _df.loc[_df[block_id] == bid, field] = sig
+
+            # Min-Max scaling
+            if scale:
+                _df.loc[_df[block_id] == bid, field] = MinMaxScaler(
+                ).fit_transform(_df[_df[block_id] == bid][field].values.reshape(-1, 1))
+
+            # Apply smoothing
+            if smoothing_window is not None:
+                smoothed = _df.loc[_df[block_id] ==
+                                   bid, field].rolling(2).mean()
+                _df.loc[_df[block_id] == bid, field] = smoothed
 
     return _df
 
