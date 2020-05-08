@@ -1,3 +1,4 @@
+from sklearn.exceptions import DataConversionWarning
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt, welch, firwin
@@ -10,6 +11,7 @@ from pathlib import Path
 from sklearn.feature_selection import SelectKBest, f_classif
 import pywt
 from ..lamonaca_and_nemcova.utils import spo2_estimation, get_peak_height_slope
+from tqdm import tqdm
 
 
 def _eval_feat_engineering(all_features):
@@ -17,7 +19,7 @@ def _eval_feat_engineering(all_features):
 
     # https://github.com/gianlucatruda/Spo2_evaluation/issues/4
     from sklearn.metrics import mean_squared_error as mse
-    from sklearn.linear_model import LassoLars
+    from sklearn.linear_model import LassoLars, LinearRegression
     from sklearn.neural_network import MLPRegressor
     from xgboost import XGBRegressor
     from tqdm import tqdm
@@ -25,21 +27,25 @@ def _eval_feat_engineering(all_features):
     import json
     from pandas.io.json import json_normalize
 
+    import warnings
+    warnings.filterwarnings(action='ignore', category=UserWarning)
+    warnings.filterwarnings(action='ignore', category=RuntimeWarning)
+
     targets = ['spo2', 'hr']
-    models = [XGBRegressor, LassoLars, MLPRegressor]
-    model_names = ['xgboost', 'lasso', 'mlp']
-    K_vals = [6, 10, 15, 20, 30, 50, 80]
+    models = [XGBRegressor, LassoLars, LinearRegression]
+    model_names = ['xgboost', 'lasso', 'lr']
+    K_vals = [2, 3, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80]
 
     results = {'target': [], 'model': [], 'k': [], 'mse': []}
 
     for target in targets:
         print(f"Evaluating {target}...")
-        for K in tqdm(K_vals):
+        for K in tqdm(K_vals, total=2*len(K_vals)):
             _X = all_features.drop(targets, axis=1).values
             _y = all_features[target].values
             kbest = SelectKBest(f_classif, k=K).fit(_X, _y)
             _X = _X[:, kbest.get_support()]
-            kf = KFold(n_splits=5)
+            kf = KFold(n_splits=10)
             for train_index, test_index in kf.split(_X):
                 X_train, X_test = _X[train_index], _X[test_index]
                 y_train, y_test = _y[train_index], _y[test_index]
@@ -154,7 +160,7 @@ def rgb_to_ppg(df: pd.DataFrame,
                 b = firwin(order+1, cutoff, )
                 a = 1.0
 
-    for bid in _df[block_id].unique():
+    for bid in tqdm(_df[block_id].unique()):
         for field in tx_fields:
 
             # Apply the filter
@@ -322,7 +328,45 @@ def select_best_features(df: pd.DataFrame, n_features=20, target='SpO2') -> pd.D
     return _df
 
 
-def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False, numeric_sample_id=True) -> pd.DataFrame:
+def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=10):
+    """Rolling window of `n_frames` to augment the data.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw RGB signal data with `sample_id` and `frame` fields.
+    n_frames : int, optional
+        The number of frames per window (the width), by default 200
+    trim : tuple, optional
+        How many frames to trim of the beginning and end of each original
+        sample, by default (20, 20)
+    step : int, optional
+        The number of frames to shift the window start for each
+        augmented sample, by default 10
+
+    Returns
+    -------
+    out_df : pd.DataFrame
+        A dataframe of the augmented data that should be much longer than
+        the previous dataframe. The `sample_id` and `frame` fields are
+        updated from the original values passed in.
+    """
+
+    augmented_blocks = []
+    for sid in tqdm(df.sample_id.unique()):
+        block = df[df.sample_id == sid].iloc[trim[0]: -trim[1]].copy()
+        for win_index, start in enumerate(range(0, block.shape[0] - n_frames, step)):
+            sid_new = sid*1000 + win_index
+            window = block.iloc[start: start + n_frames].copy()
+            window['sample_id'] = sid_new
+            window['frame'] = np.arange(0, n_frames)
+            augmented_blocks.append(window)
+    out_df = pd.concat(augmented_blocks)
+
+    return out_df
+
+
+def augment_dataset(df: pd.DataFrame, n_frames=200, numeric_sample_id=True) -> pd.DataFrame:
     """Simple data augmentation by chopping timeseries into blocks.
 
     This doesn't modify the data. It just overwrites the `sample_id`
@@ -335,8 +379,6 @@ def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False, numeric_sampl
         Your timeries data for all samples.
     n_frames : int, optional
         The lenth (in frames) of each new chunk/sample, by default 200
-    overlap : bool, optional
-        Whether blocks should overlap (not yet implemented), by default False
 
     Returns
     -------
@@ -354,9 +396,6 @@ def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False, numeric_sampl
         return frame % n_frames
 
     _df = df.copy()
-
-    if overlap:
-        raise NotImplementedError("Overalapping not yet supported")
 
     # Make a copy of the sample_id for later reference
     _df['original_sample_id'] = _df['sample_id']
