@@ -10,6 +10,7 @@ from pathlib import Path
 from sklearn.feature_selection import SelectKBest, f_classif
 import pywt
 from ..lamonaca_and_nemcova.utils import spo2_estimation, get_peak_height_slope
+from tqdm import tqdm
 
 
 def calc_spo2(df: pd.DataFrame):
@@ -244,6 +245,42 @@ def select_best_features(df: pd.DataFrame, n_features=20, target='SpO2') -> pd.D
     _df = df[[*best_cols, target]]
 
     return _df
+
+
+def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=10):
+    """Rolling window of `n_frames` to augment the data.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw RGB signal data with `sample_id` and `frame` fields.
+    n_frames : int, optional
+        The number of frames per window (the width), by default 200
+    trim : tuple, optional
+        How many frames to trim of the beginning and end of each original
+        sample, by default (20, 20)
+    step : int, optional
+        The number of frames to shift the window start for each
+        augmented sample, by default 10
+    Returns
+    -------
+    out_df : pd.DataFrame
+        A dataframe of the augmented data that should be much longer than
+        the previous dataframe. The `sample_id` and `frame` fields are
+        updated from the original values passed in.
+    """
+
+    augmented_blocks = []
+    for sid in tqdm(df.sample_id.unique()):
+        block = df[df.sample_id == sid].iloc[trim[0]: -trim[1]].copy()
+        for win_index, start in enumerate(range(0, block.shape[0] - n_frames, step)):
+            sid_new = sid*1000 + win_index
+            window = block.iloc[start: start + n_frames].copy()
+            window['sample_id'] = sid_new
+            window['frame'] = np.arange(0, n_frames)
+            augmented_blocks.append(window)
+    out_df = pd.concat(augmented_blocks)
+
+    return out_df
 
 
 def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False) -> pd.DataFrame:
