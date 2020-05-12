@@ -1,3 +1,4 @@
+from sklearn.exceptions import DataConversionWarning
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt, welch, firwin
@@ -13,8 +14,51 @@ from ..lamonaca_and_nemcova.utils import spo2_estimation, get_peak_height_slope
 from tqdm import tqdm
 
 
-def calc_spo2(df: pd.DataFrame):
+def _eval_feat_engineering(all_features):
+    # Little helper function I wrote for some analysis comparing HR and SpO2 as a target
 
+    # https://github.com/gianlucatruda/Spo2_evaluation/issues/4
+    from sklearn.metrics import mean_squared_error as mse
+    from sklearn.linear_model import LassoLars, LinearRegression
+    from sklearn.neural_network import MLPRegressor
+    from xgboost import XGBRegressor
+    from tqdm import tqdm
+    from sklearn.model_selection import KFold
+    import json
+    from pandas.io.json import json_normalize
+
+    import warnings
+    warnings.filterwarnings(action='ignore', category=UserWarning)
+    warnings.filterwarnings(action='ignore', category=RuntimeWarning)
+
+    targets = ['spo2', 'hr']
+    models = [XGBRegressor, LassoLars, LinearRegression]
+    model_names = ['xgboost', 'lasso', 'lr']
+    K_vals = [2, 3, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80]
+
+    results = {'target': [], 'model': [], 'k': [], 'mse': []}
+
+    for target in targets:
+        print(f"Evaluating {target}...")
+        for K in tqdm(K_vals, total=2*len(K_vals)):
+            _X = all_features.drop(targets, axis=1).values
+            _y = all_features[target].values
+            kbest = SelectKBest(f_classif, k=K).fit(_X, _y)
+            _X = _X[:, kbest.get_support()]
+            kf = KFold(n_splits=10)
+            for train_index, test_index in kf.split(_X):
+                X_train, X_test = _X[train_index], _X[test_index]
+                y_train, y_test = _y[train_index], _y[test_index]
+                for model, mname in zip(models, model_names):
+                    mod = model().fit(X_train, y_train)
+                    score = mse(y_test, mod.predict(X_test))
+                    for key, value in {'target': target, 'model': mname, 'mse': score, 'k': K}.items():
+                        results[key].append(value)
+
+    return pd.DataFrame.from_dict(results)
+
+
+def calc_spo2(df: pd.DataFrame):
     """Not working"""
     raise NotImplementedError()
 
@@ -25,8 +69,10 @@ def calc_spo2(df: pd.DataFrame):
 
     timestamps = np.linspace(0, int(float(df.shape[0])/30.0), num=df.shape[0])
 
-    vp_940, m_940, hr_940 = get_peak_height_slope(df['tx_green'].values, timestamps, 30.0)
-    vp_600, m_600, hr_600 = get_peak_height_slope(df['tx_red'].values, timestamps, 30.0)
+    vp_940, m_940, hr_940 = get_peak_height_slope(
+        df['tx_green'].values, timestamps, 30.0)
+    vp_600, m_600, hr_600 = get_peak_height_slope(
+        df['tx_red'].values, timestamps, 30.0)
 
     ln_vp_600 = np.log(vp_600)
     ln_vp_940 = np.log(vp_940)
@@ -49,7 +95,13 @@ def _wavelet_filter_signal(s, wave='db4', *args, **kwargs):
     return s_mod
 
 
-def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193, 0.001), scale=False, block_id='sample_id') -> pd.DataFrame:
+def rgb_to_ppg(df: pd.DataFrame,
+               filter='band',
+               outlier_thresh=2.5,
+               scale=True,
+               smoothing_window=3,
+               block_id='sample_id',
+               ) -> pd.DataFrame:
     """Turn RGB means into PPG curves as per Lamonaca.
 
     Parameters
@@ -61,9 +113,14 @@ def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193
         `band` = bandpass Butterworth filter
         `low` = lowpass Butterworth filter
         `firwin` = lowpass Firwin filter
-    qe_constants : (float, float, float)
-        The Quantum Efficiency constants (Lamonaca et al.) to use for scaling the
-        means of the (red, green, blue) channels respectively.
+    outlier_thresh : float, optional
+        The number of standard deviations at which outliers will be
+        clipped, by default 2.5.
+    scale : bool, optional
+        Whether the signals should be scaled to the range 0-1 using MinMax.
+        Set to None to disable.
+    smoothing_window : int, optional
+        The window size to use for smoothing. Set to None to disable.
     block_id : str, optional
         The field to use for chunking the data before applying transforms,
         by default 'sample_id'.
@@ -81,8 +138,7 @@ def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193
     _df = df.copy()
 
     for i, colour in enumerate(['red', 'green', 'blue']):
-        qe_const = qe_constants[i]
-        _df[f'tx_{colour}'] = _df[f'mean_{colour}'] * qe_const
+        _df[f'tx_{colour}'] = _df[f'mean_{colour}'] * 1.0
 
     tx_fields = ['tx_red', 'tx_green', 'tx_blue']
 
@@ -104,16 +160,36 @@ def rgb_to_ppg(df: pd.DataFrame, filter='band', qe_constants=(0.004989, 0.001193
                 b = firwin(order+1, cutoff, )
                 a = 1.0
 
-        # Apply the filter (and normalise)
-        for bid in _df[block_id].unique():
-            for field in tx_fields:
+    for bid in tqdm(_df[block_id].unique()):
+        for field in tx_fields:
+
+            # Apply the filter
+            if filter is not None:
                 _df.loc[_df[block_id] == bid, field] = filtfilt(
                     b, a, _df[_df[block_id] == bid][field])
 
-                # Scaling
-                if scale:
-                    _df.loc[_df[block_id] == bid, field] = MinMaxScaler(
-                    ).fit_transform(_df[_df[block_id] == bid][field].values.reshape(-1, 1))
+            # Clip outliers
+            if outlier_thresh is not None:
+                sig = _df[_df[block_id] == bid][field]
+                stdev = sig.values.std()
+                median = np.median(sig.values)
+                mean = sig.mean()
+                sig = np.where(sig < (outlier_thresh*stdev),
+                               sig, mean+outlier_thresh*stdev)
+                sig = np.where(sig < (-outlier_thresh*stdev),
+                               mean-outlier_thresh*stdev, sig)
+                _df.loc[_df[block_id] == bid, field] = sig
+
+            # Min-Max scaling
+            if scale:
+                _df.loc[_df[block_id] == bid, field] = MinMaxScaler(
+                ).fit_transform(_df[_df[block_id] == bid][field].values.reshape(-1, 1))
+
+            # Apply smoothing
+            if smoothing_window is not None:
+                smoothed = _df.loc[_df[block_id] ==
+                                   bid, field].rolling(2).mean()
+                _df.loc[_df[block_id] == bid, field] = smoothed
 
     return _df
 
@@ -153,11 +229,12 @@ def _attach_sample_id_to_ground_truth(df: pd.DataFrame, labels: pd.DataFrame) ->
     pd.DataFrame
         [description]
     """
-    _df = df[['sample_id', 'sample_source']]
-    _labels = labels.copy()
 
-    _df = _create_path_field(_df)
-    _df = _df.drop_duplicates(subset=['sample_id', 'path'], keep='first')
+    _labels = labels.copy()
+    _df = df.drop_duplicates(subset=['sample_id'], keep='first')
+
+    if 'path' not in _df.columns:
+        _df = _create_path_field(_df)
 
     out = _df.merge(_labels, on='path', how='inner')
 
@@ -187,15 +264,17 @@ def engineer_features(df: pd.DataFrame, labels: pd.DataFrame, target='SpO2', sel
     _df = df.copy()
     _labels = labels.copy()
 
-    if 'sample_id' not in labels.columns:
-        _labels = _attach_sample_id_to_ground_truth(_df, _labels)
+    # if 'sample_id' not in _labels.columns:
+    #     _labels = _attach_sample_id_to_ground_truth(_df, _labels)
+    _df = _df.select_dtypes(np.number)
 
     ids = _df['sample_id'].unique()
 
     _labels = _labels[_labels['sample_id'].isin(ids)]
     y = _labels.set_index('sample_id')[target].astype(np.float)
 
-    _df.drop('sample_source', axis=1, inplace=True)
+    if 'sample_source' in _df.columns:
+        _df.drop('sample_source', axis=1, inplace=True)
 
     extracted_features = extract_features(
         _df,
@@ -205,6 +284,7 @@ def engineer_features(df: pd.DataFrame, labels: pd.DataFrame, target='SpO2', sel
 
     impute(extracted_features)
     features = extracted_features
+
     if select:
         features_filtered = select_features(
             extracted_features, y, ml_task='regression',)
@@ -217,7 +297,8 @@ def engineer_features(df: pd.DataFrame, labels: pd.DataFrame, target='SpO2', sel
 
 
 def select_best_features(df: pd.DataFrame, n_features=20, target='SpO2') -> pd.DataFrame:
-    """Perform feature selection using k-best strategy and return dataframe.
+    """Perform feature selection using k-best strategy and return dataframe
+    including the target.
 
     Parameters
     ----------
@@ -249,6 +330,7 @@ def select_best_features(df: pd.DataFrame, n_features=20, target='SpO2') -> pd.D
 
 def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=10):
     """Rolling window of `n_frames` to augment the data.
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -261,6 +343,7 @@ def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=
     step : int, optional
         The number of frames to shift the window start for each
         augmented sample, by default 10
+        
     Returns
     -------
     out_df : pd.DataFrame
@@ -283,7 +366,7 @@ def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=
     return out_df
 
 
-def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False) -> pd.DataFrame:
+def augment_dataset(df: pd.DataFrame, n_frames=200, numeric_sample_id=True) -> pd.DataFrame:
     """Simple data augmentation by chopping timeseries into blocks.
 
     This doesn't modify the data. It just overwrites the `sample_id`
@@ -296,8 +379,6 @@ def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False) -> pd.DataFra
         Your timeries data for all samples.
     n_frames : int, optional
         The lenth (in frames) of each new chunk/sample, by default 200
-    overlap : bool, optional
-        Whether blocks should overlap (not yet implemented), by default False
 
     Returns
     -------
@@ -306,15 +387,15 @@ def augment_dataset(df: pd.DataFrame, n_frames=200, overlap=False) -> pd.DataFra
     """
 
     def gen_sample_id(sid, frame):
-        return f"{sid}_{frame // n_frames}"
+        if numeric_sample_id:
+            return int(100*sid + (frame // n_frames))
+        else:
+            return f"{sid}_{frame // n_frames}"
 
     def gen_frame(frame):
         return frame % n_frames
 
     _df = df.copy()
-
-    if overlap:
-        raise NotImplementedError("Overalapping not yet supported")
 
     # Make a copy of the sample_id for later reference
     _df['original_sample_id'] = _df['sample_id']
