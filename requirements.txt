@@ -7,3 +7,5 @@ pandas>=0.24.1
 torchvision>=0.5.0
 tsfresh>=0.15.1
 scikit-learn>=0.21
+Keras>=2.3.1
+tensorflow>=2.2.0

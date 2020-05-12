@@ -343,7 +343,7 @@ def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=
     step : int, optional
         The number of frames to shift the window start for each
         augmented sample, by default 10
-
+        
     Returns
     -------
     out_df : pd.DataFrame
