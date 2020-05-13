@@ -1,32 +1,27 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import statsmodels.stats.api as sms
 import pickle
+import matplotlib.pyplot as plt
 
 from modelling.feat_engineer.data_processing import make_seq
+from modelling.uncertainty_model.model import evaluate
 from tensorflow.keras.models import load_model
-
-
-def get_conf_int_for(sample_id, X_test, y_test, features=None, num_samples=250, show=True, bins=25):
-    X_sample = np.tile(X_test[sample_id], (num_samples, 1, 1))
-    if features is not None:
-        features = np.tile(features[sample_id], (num_samples, 1))
-        ps = model.predict([X_sample, features])
-    else:
-        ps = model.predict(X_sample)
-    if show:
-        plt.hist(ps, bins=bins)
-        plt.show()
-    begin, end = sms.DescrStatsW(ps.flatten()).tconfint_mean()
-    print('Confidence interval: ', begin, end)
-    print('Mean: ', np.mean([begin, end]))
-    print('True: ', y_test[sample_id])
+from sklearn.model_selection import train_test_split
 
 
 model = load_model('model.h5')
-#history = pickle.load(open('/trainHistoryDict'), "rb")
+history = pickle.load(open('trainHistoryDict', "rb"))
 
-X_test, y_test, fs = make_seq('preprocessed_data/nemcova_data/nemcova_data.csv', 'preprocessed_data/nemcova_data/ground_truths_nemcova.csv', return_features=True)
+X, y, feats = make_seq('preprocessed_data/combined_data/combined_data.csv',
+                       'preprocessed_data/combined_data/ground_truth_combined.csv', return_features=True,
+                       trim=(50, 50), step=25)
 
-for i in range(len(y_test[:10])):
-    get_conf_int_for(i, X_test, y_test, fs, num_samples=500, show=False)
+_, X_test, _, y_test, _, fs_test = train_test_split(X, y, feats, test_size=0.2, random_state=55)
+
+
+e = 50
+
+for dropout in [0.1, 0.2, 0.3, 0.4]:
+    print(f'For {e} epochs\n')
+    plt.plot(history['loss'])
+    plt.show()
+    evaluate(model, X_test, y_test, fs_test, num_samples=500, show_ci=False, print_ci=False)
+    print('\n\n')
