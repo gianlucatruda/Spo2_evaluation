@@ -53,7 +53,7 @@ def no_feature_model(X):
     return Model(inputs=inputs, outputs=out)
 
 
-def learn(model, data, y, learning_rate=0.01, epochs=100, verbose=1, batch_size=32):
+def learn(model, X, y, features, learning_rate=0.01, epochs=100, verbose=1, batch_size=32):
     '''
 
     :param model: keras model
@@ -70,7 +70,7 @@ def learn(model, data, y, learning_rate=0.01, epochs=100, verbose=1, batch_size=
     #opt = optimizers.SGD(learning_rate=learning_rate)
     model.compile(optimizer=opt, loss='mse')
     # fit model
-    return model.fit(data, y, epochs=epochs, verbose=verbose, batch_size=batch_size)
+    return model.fit([X, features], y, epochs=epochs, verbose=verbose, batch_size=batch_size)
 
 
 def get_conf_int_for(model, sample_id, X_test, y_test, features=None, num_samples=250, show_ci=True, print_ci=True,
