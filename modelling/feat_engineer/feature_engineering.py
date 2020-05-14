@@ -191,6 +191,9 @@ def rgb_to_ppg(df: pd.DataFrame,
                                    bid, field].rolling(2).mean()
                 _df.loc[_df[block_id] == bid, field] = smoothed
 
+    # The updated method often results in the 0th frame of each block being NaN
+    _df.dropna(inplace=True, axis=0)
+
     return _df
 
 

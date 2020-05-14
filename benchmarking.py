@@ -30,11 +30,13 @@ model_names = ['xgboost', 'lasso', 'lr']
 K_vals = [2, 3, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80]
 
 results = {'aug_window': [], 'target': [], 'model': [], 'k': [], 'mse': []}
-for aug in tqdm([60, 90, 120, 200, 240, 300], desc='Aug'):
+for aug in tqdm([60, 90, 120, 160, 200, 240], desc='Aug'):
 
     # Augment dataset
-    aug_data = rolling_augment_dataset(dataset, n_frames=aug, step=20)
+    aug_data = rolling_augment_dataset(dataset, n_frames=aug, step=20, trim=(15,10))
     aug_labels = _attach_sample_id_to_ground_truth(aug_data, labels)
+    # Transform RGB to PPG and clean signal
+    aug_data = rgb_to_ppg(aug_data, filter='band', outlier_thresh=2.5, scale=True, smoothing_window=2)
     # Engineer features
     all_features = engineer_features(
         aug_data, aug_labels, target=targets, select=False)
@@ -46,6 +48,7 @@ for aug in tqdm([60, 90, 120, 200, 240, 300], desc='Aug'):
             _y = all_features[target].values
             kbest = SelectKBest(f_classif, k=K).fit(_X, _y)
             _X = _X[:, kbest.get_support()]
+            print(all_features.drop(targets, axis=1).columns[kbest.get_support()])
             kf = KFold(n_splits=5)
             for train_index, test_index in kf.split(_X):
                 X_train, X_test = _X[train_index], _X[test_index]
