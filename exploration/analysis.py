@@ -47,6 +47,36 @@ def kl_divergence(df: pd.DataFrame, prefix='tx_', band=(0.5, 3.5)):
     return total
 
 
+def skewness(df: pd.DataFrame, prefix='mean_', id_field='sample_id') -> pd.DataFrame:
+    """Returns flattened form of the dataframe, with skewness values for each colour channel
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data (time series)
+    prefix : str, optional
+        The prefix to look for with each colour, by default 'mean_'
+    id_field : str, optional
+        The field to chunk the data by, by default 'sample_id'
+
+    Returns
+    -------
+    pd.DataFrame
+        Dataframe with the skewness values.
+    """
+
+    skews = {'sample_id': [], 'skew_red': [],
+             'skew_green': [], 'skew_blue': []}
+
+    for sid in df[id_field].unique():
+        subset = df[df[id_field] == sid]
+        for c in ['red', 'green', 'blue']:
+            skews[f"skew_{c}"].append(scipy.stats.skew(subset[f"{prefix}{c}"]))
+        skews['sample_id'].append(sid)
+
+    return pd.DataFrame(skews)
+
+
 def zero_crossings(data: np.array) -> int:
     """ The rate of sign-changes in the processed signal
 
@@ -126,33 +156,3 @@ def inspect_ppg(df: pd.DataFrame, prefix='tx_', xlim=None, title=None, *args, **
     ax[2].set_xlabel('Frame')
 
     return fig
-
-
-def quantify_skewness(df: pd.DataFrame, prefix='mean_', id_field='sample_id') -> pd.DataFrame:
-    """Returns flattened form of the dataframe, with skewness values for each colour channel
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input data (time series)
-    prefix : str, optional
-        The prefix to look for with each colour, by default 'mean_'
-    id_field : str, optional
-        The field to chunk the data by, by default 'sample_id'
-
-    Returns
-    -------
-    pd.DataFrame
-        Dataframe with the skewness values.
-    """
-
-    skews = {'sample_id': [], 'skew_red': [],
-             'skew_green': [], 'skew_blue': []}
-
-    for sid in df[id_field].unique():
-        subset = df[df[id_field] == sid]
-        for c in ['red', 'green', 'blue']:
-            skews[f"skew_{c}"].append(scipy.stats.skew(subset[f"{prefix}{c}"]))
-        skews['sample_id'].append(sid)
-
-    return pd.DataFrame(skews)
