@@ -5,6 +5,46 @@ from sklearn.preprocessing import normalize
 from sklearn.preprocessing import StandardScaler
 from matplotlib import pyplot as plt
 import scipy
+from scipy.special import kl_div
+
+
+def kl_divergence(df: pd.DataFrame, prefix='tx_', band=(0.5, 3.5)):
+    """Generate a signal quality score (lower is better) based on KL divergence.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        input data that (works better if already cleaned)
+    prefix : str, optional
+        the prefix to look for with each colour, by default 'tx_'
+    band : tuple, optional
+        The bounds of the frequency band within which to measure KL divergence, by default (0.5, 3.5)
+
+    Returns
+    -------
+    total : float
+        Sum of KL divergence
+    """
+    colours = ['red', 'green', 'blue']
+
+    def get_spec(block, field):
+        x = block[field]
+        f, Pxx_spec = welch(x, 30.0, 'flattop',
+                            nperseg=len(x), scaling='spectrum')
+        # only consider certain Hz band
+        spec = Pxx_spec[(f < band[1]) & (f > band[0])]
+        return spec
+
+    specs = {c: get_spec(df, f"{prefix}{c}") for c in colours}
+    klds = 0
+    for colour1 in colours:
+        for colour2 in colours:
+            if colour1 != colour2:
+                # Calculate KL-divergence between pairs of colours
+                kld = kl_div(specs[colour1], specs[colour2])
+                klds += np.sum(kld)
+    total = np.sum(klds)
+    return total
 
 
 def zero_crossings(data: np.array) -> int:
@@ -58,7 +98,7 @@ def power_analysis(df: pd.DataFrame, field_prefix='mean_', show=False):
         plt.show()
 
 
-def inspect_ppg(df: pd.DataFrame, xlim=None, *args, **kwargs):
+def inspect_ppg(df: pd.DataFrame, prefix='tx_', xlim=None, title=None, *args, **kwargs):
     """Renders subplots of PPG data for each colour.
 
     Parameters
@@ -76,11 +116,43 @@ def inspect_ppg(df: pd.DataFrame, xlim=None, *args, **kwargs):
     fig, ax = plt.subplots(3, 1)
 
     for i, colour in enumerate(['red', 'green', 'blue']):
-        field = f"tx_{colour}"
+        field = f"{prefix}{colour}"
         ax[i].plot(df['frame'], df[field], color=colour, *args, **kwargs)
         if xlim is not None:
             ax[i].set_xlim(xlim)
-    ax[1].set_ylabel('Value (after norm.)')
+    if title is not None:
+        fig.suptitle(title)
+    ax[1].set_ylabel('Value')
     ax[2].set_xlabel('Frame')
 
     return fig
+
+
+def quantify_skewness(df: pd.DataFrame, prefix='mean_', id_field='sample_id') -> pd.DataFrame:
+    """Returns flattened form of the dataframe, with skewness values for each colour channel
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data (time series)
+    prefix : str, optional
+        The prefix to look for with each colour, by default 'mean_'
+    id_field : str, optional
+        The field to chunk the data by, by default 'sample_id'
+
+    Returns
+    -------
+    pd.DataFrame
+        Dataframe with the skewness values.
+    """
+
+    skews = {'sample_id': [], 'skew_red': [],
+             'skew_green': [], 'skew_blue': []}
+
+    for sid in df[id_field].unique():
+        subset = df[df[id_field] == sid]
+        for c in ['red', 'green', 'blue']:
+            skews[f"skew_{c}"].append(scipy.stats.skew(subset[f"{prefix}{c}"]))
+        skews['sample_id'].append(sid)
+
+    return pd.DataFrame(skews)
