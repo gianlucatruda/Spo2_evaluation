@@ -6,6 +6,38 @@ from sklearn.preprocessing import StandardScaler
 from matplotlib import pyplot as plt
 import scipy
 from scipy.special import kl_div
+from modelling.feat_engineer.feature_engineering import _attach_sample_id_to_ground_truth
+from tqdm import tqdm
+
+
+def estimate_quality(data: pd.DataFrame, labels: pd.DataFrame, prefix='tx_') -> pd.DataFrame:
+    # Estimate signal quality with a composite metric
+    _labels = labels.copy()
+
+    if 'sample_id' not in _labels.columns:
+        _labels = _attach_sample_id_to_ground_truth(data, _labels)
+        print('ping')
+
+    _labels['quality'] = np.nan
+
+    for sid in tqdm(data['sample_id'].unique()):
+        block = data[data['sample_id'] == sid]
+
+        kld = kl_divergence(block, prefix=prefix)
+        skews = []
+        for c in ['red', 'green', 'blue']:
+            skews.append(scipy.stats.skew(block[f"{prefix}{c}"]))
+
+        # Calculate score
+        abs_skews = [np.abs(s) for s in skews]
+        sum_abs_skews = np.sum(abs_skews)
+        scaled_kld = min(kld / block.shape[0], 1.0)
+        scaled_skew = min(sum_abs_skews / block.shape[0], 1.0)
+        print(scaled_skew, scaled_kld)
+        _labels.loc[_labels['sample_id'] == sid, 'quality'] = scaled_skew + scaled_kld
+
+
+    return _labels
 
 
 def kl_divergence(df: pd.DataFrame, prefix='tx_', band=(0.5, 3.5)):
