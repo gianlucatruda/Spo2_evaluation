@@ -239,7 +239,7 @@ def _attach_sample_id_to_ground_truth(df: pd.DataFrame, labels: pd.DataFrame) ->
     if 'path' not in _df.columns:
         _df = _create_path_field(_df)
 
-    out = _df.merge(_labels, on='path', how='inner')
+    out = _labels.merge(_df[['path', 'sample_id']], on='path', how='inner')
 
     return out
 
