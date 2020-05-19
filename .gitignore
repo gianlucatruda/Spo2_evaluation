@@ -3,6 +3,7 @@ data/*
 Pipfile
 Pipfile.lock
 profiling/*
+results/*
 
 # macOS dotfiles
 **/.DS_Store

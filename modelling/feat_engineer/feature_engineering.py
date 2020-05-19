@@ -160,7 +160,7 @@ def rgb_to_ppg(df: pd.DataFrame,
                 b = firwin(order+1, cutoff, )
                 a = 1.0
 
-    for bid in tqdm(_df[block_id].unique()):
+    for bid in tqdm(_df[block_id].unique(), leave=False):
         for field in tx_fields:
 
             # Apply the filter
@@ -190,6 +190,9 @@ def rgb_to_ppg(df: pd.DataFrame,
                 smoothed = _df.loc[_df[block_id] ==
                                    bid, field].rolling(2).mean()
                 _df.loc[_df[block_id] == bid, field] = smoothed
+
+    # The updated method often results in the 0th frame of each block being NaN
+    _df.dropna(inplace=True, axis=0)
 
     return _df
 
@@ -236,7 +239,7 @@ def _attach_sample_id_to_ground_truth(df: pd.DataFrame, labels: pd.DataFrame) ->
     if 'path' not in _df.columns:
         _df = _create_path_field(_df)
 
-    out = _df.merge(_labels, on='path', how='inner')
+    out = _labels.merge(_df[['path', 'sample_id']], on='path', how='inner')
 
     return out
 
@@ -343,7 +346,7 @@ def rolling_augment_dataset(df: pd.DataFrame, n_frames=200, trim=(20, 20), step=
     step : int, optional
         The number of frames to shift the window start for each
         augmented sample, by default 10
-        
+
     Returns
     -------
     out_df : pd.DataFrame
