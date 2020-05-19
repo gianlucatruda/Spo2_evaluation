@@ -11,37 +11,60 @@ from tqdm import tqdm
 
 
 def estimate_quality(data: pd.DataFrame, labels: pd.DataFrame, prefix='tx_') -> pd.DataFrame:
-    # Estimate signal quality with a composite metric
+    """Adds fields to the `labels` dataframe to estimate skewness and KL Divergence.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        (Augmented and preprocessed) time series data for all samples.
+    labels : pd.DataFrame
+        The ground truth values corresponding to the `data`.
+    prefix : str, optional
+        The field prefix for each colour to estimate values from, by default 'tx_'
+
+    Returns
+    -------
+    pd.DataFrame
+        A copy of `labels`, but with fields for `skewness` and `kldiv`.
+    """
     _labels = labels.copy()
 
     if 'sample_id' not in _labels.columns:
         _labels = _attach_sample_id_to_ground_truth(data, _labels)
         print('ping')
 
-    _labels['quality'] = np.nan
+    _labels['kldiv'] = np.nan
+    _labels['skewness'] = np.nan
 
     for sid in tqdm(data['sample_id'].unique()):
         block = data[data['sample_id'] == sid]
 
-        kld = kl_divergence(block, prefix=prefix)
+        # Perform Weltch transform
+        specs_narrow = get_spectra(block, prefix=prefix, band=(0.8, 2.5))
+
+        # Calculate mutual KLD across all channels
+        kld = kl_divergence(specs_narrow)
+
         skews = []
         for c in ['red', 'green', 'blue']:
             skews.append(scipy.stats.skew(block[f"{prefix}{c}"]))
 
-        # Calculate score
+        # Take absolute value of skewness for each channel and sum
         abs_skews = [np.abs(s) for s in skews]
         sum_abs_skews = np.sum(abs_skews)
+
+        # Scale the skewness and KLD by the number of frames
         scaled_kld = min(kld / block.shape[0], 1.0)
         scaled_skew = min(sum_abs_skews / block.shape[0], 1.0)
-        print(scaled_skew, scaled_kld)
-        _labels.loc[_labels['sample_id'] == sid, 'quality'] = scaled_skew + scaled_kld
 
+        _labels.loc[_labels['sample_id'] == sid, 'kldiv'] = scaled_kld
+        _labels.loc[_labels['sample_id'] == sid, 'skewness'] = scaled_skew
 
     return _labels
 
 
-def kl_divergence(df: pd.DataFrame, prefix='tx_', band=(0.5, 3.5)):
-    """Generate a signal quality score (lower is better) based on KL divergence.
+def get_spectra(df: pd.DataFrame, prefix='tx_', band=(0.8, 2.5)):
+    """Generate spectra using Weltch FFT
 
     Parameters
     ----------
@@ -52,12 +75,7 @@ def kl_divergence(df: pd.DataFrame, prefix='tx_', band=(0.5, 3.5)):
     band : tuple, optional
         The bounds of the frequency band within which to measure KL divergence, by default (0.5, 3.5)
 
-    Returns
-    -------
-    total : float
-        Sum of KL divergence
     """
-    colours = ['red', 'green', 'blue']
 
     def get_spec(block, field):
         x = block[field]
@@ -67,13 +85,34 @@ def kl_divergence(df: pd.DataFrame, prefix='tx_', band=(0.5, 3.5)):
         spec = Pxx_spec[(f < band[1]) & (f > band[0])]
         return spec
 
+    colours = ['red', 'green', 'blue']
     specs = {c: get_spec(df, f"{prefix}{c}") for c in colours}
+
+    return specs
+
+
+def kl_divergence(spectra: dict):
+    """Generate a signal quality score (lower is better) based on mutual KL divergence.
+
+
+    Parameters
+    ----------
+    spectra : dict
+        colour : List[spectra] pairs for each channel
+
+    Returns
+    -------
+    total : float
+        Sum of KL divergence
+    """
+    colours = ['red', 'green', 'blue']
+
     klds = 0
     for colour1 in colours:
         for colour2 in colours:
             if colour1 != colour2:
                 # Calculate KL-divergence between pairs of colours
-                kld = kl_div(specs[colour1], specs[colour2])
+                kld = kl_div(spectra[colour1], spectra[colour2])
                 klds += np.sum(kld)
     total = np.sum(klds)
     return total
