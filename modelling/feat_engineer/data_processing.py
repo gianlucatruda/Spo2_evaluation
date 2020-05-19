@@ -78,13 +78,9 @@ def make_seq(data_path, gt_path, return_features=False, trim=(50, 50), step=25):
     if return_features:
         X, y, z = prepare_sequences(ppg, gt, return_full=return_features, trim=trim, step=step)
         # feature creation
-        print(X.shape, y.shape, z.shape)
-        print('started feature engineering')
         labels = z[['sample_id', 'spo2']].groupby('sample_id')[['spo2']].agg('mean').reset_index()
         features = engineer_features(z, labels, target='spo2', )
-        print('finished feature engineering')
         # new_features = features.loc[:, (features.std() > 100) & (features.mean() < 1000)]
-        print('selecting best')
         top50 = select_best_features(features, n_features=50, target='spo2')
         z = top50.drop(columns='spo2').values
         #z = z.groupby('sample_id')['hr'].mean().values
