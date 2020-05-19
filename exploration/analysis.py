@@ -31,7 +31,6 @@ def estimate_quality(data: pd.DataFrame, labels: pd.DataFrame, prefix='tx_') -> 
 
     if 'sample_id' not in _labels.columns:
         _labels = _attach_sample_id_to_ground_truth(data, _labels)
-        print('ping')
 
     _labels['kldiv'] = np.nan
     _labels['skewness'] = np.nan
