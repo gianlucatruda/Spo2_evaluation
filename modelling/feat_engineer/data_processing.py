@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from modelling.feat_engineer.feature_engineering import rgb_to_ppg, rolling_augment_dataset, \
     engineer_features, select_best_features
+from exploration.analysis import estimate_quality
 
 
 def vectorize(full_data, vectorization=np.array, columns=['tx_red', 'tx_green', 'tx_blue']):
@@ -79,11 +80,13 @@ def make_seq(data_path, gt_path, return_features=False, trim=(50, 50), step=25):
         X, y, z = prepare_sequences(ppg, gt, return_full=return_features, trim=trim, step=step)
         # feature creation
         labels = z[['sample_id', 'spo2']].groupby('sample_id')[['spo2']].agg('mean').reset_index()
-        features = engineer_features(z, labels, target='spo2', )
+        features = engineer_features(z, labels, target='spo2')
+        quality_estimations = estimate_quality(z, labels).sort_values(by='sample_id')
+        #features = pd.merge(quality_estimations[['sample_id', 'kldiv', 'skewness']], features.reset_index(), left_on='sample_id', right_on='id', how='right')
+        quality = (quality_estimations['kldiv'].replace(1, np.mean(quality_estimations[quality_estimations['kldiv'] < 1]['kldiv'])) + quality_estimations['skewness']).values
         # new_features = features.loc[:, (features.std() > 100) & (features.mean() < 1000)]
         top50 = select_best_features(features, n_features=50, target='spo2')
-        z = top50.drop(columns='spo2').values
         #z = z.groupby('sample_id')['hr'].mean().values
-        return X, y, z
+        return X, y, top50.drop(columns='spo2').values, quality
     return prepare_sequences(ppg, gt, return_full=return_features, trim=trim, step=step)
 
